@@ -4,13 +4,18 @@ import pandas as pd
 from datetime import datetime
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.metrics.pairwise import cosine_similarity
-
+import json
+import schedule
+import time
+import logging
 
 class UserRecommendationSystem:
     def __init__(self, api_url):
         self.api_url = api_url
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def fetch_user_data(self):
+        self.logger.info("Fetching user data")
         response = requests.get(self.api_url)
         if response.status_code == 200:
             return response.json()
@@ -50,11 +55,28 @@ class UserRecommendationSystem:
     def calculate_cosine_similarity(self, user_features):
         return cosine_similarity(user_features)
 
-    def recommend_users(self, user_index):
+    def calculate_and_save_recommendations(self):
+        self.logger.info("Calculating and saving recommendations")
         user_data = self.fetch_user_data()
         user_features = self.preprocess_user_data(user_data)
         similarity_matrix = self.calculate_cosine_similarity(user_features)
         
-        user_similarity = similarity_matrix[user_index]
-        most_similar_users = np.argsort(user_similarity)[::-1][1:]
-        return most_similar_users[:3]  
+        all_recommend = {}
+        for user_idx in range(len(user_features)):
+            user_similarity = similarity_matrix[user_idx]
+            most_similar_users = np.argsort(user_similarity)[::-1][1:]
+            all_recommend[user_idx] = most_similar_users[:3].tolist()
+        
+        with open("recommend.json", "w") as file:
+            json.dump(all_recommend, file)           
+        self.logger.info("Recommendations calculated and saved successfully")
+    
+    def schedule_data(self):
+        schedule.every().day.at("00:01").do(self.calculate_and_save_recommendations)
+
+    def run_schedule(self):
+        
+        self.schedule_data()
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
