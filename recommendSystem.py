@@ -9,11 +9,13 @@ import schedule
 import time
 import logging
 
+# 유저 추천클래스
 class UserRecommendationSystem:
     def __init__(self, api_url):
         self.api_url = api_url
         self.logger = logging.getLogger(self.__class__.__name__)
 
+    # spring 서버로부터 api fetch 하는 메소드
     def fetch_user_data(self):
         self.logger.info("Fetching user data")
         response = requests.get(self.api_url)
@@ -26,7 +28,6 @@ class UserRecommendationSystem:
     def preprocess_user_data(self, user_data):
         # 중첩된 구조를 평탄화
         df = pd.json_normalize(user_data['aiResponses'])
-
         # MultiLabelBinarizer를 사용하여 리스트 데이터 인코딩
         mlb_genre = MultiLabelBinarizer()
         genre_encoded = mlb_genre.fit_transform(df['genres'])
@@ -37,45 +38,65 @@ class UserRecommendationSystem:
         # birthDate를 나이로 변환 (null이 아닌 경우에만)
         df['birthdate'] = pd.to_datetime(df['birthDate'], errors='coerce')
         current_year = datetime.now().year
-        df['age'] = (current_year - df['birthdate'].dt.year).fillna(-1)
+        df['age'] = (current_year - df['birthdate'].dt.year)
+
+        # 나이 데이터에서 NaN 값을 기본 나이 값으로 대체
+        default_age = 23
+        df['age'].fillna(default_age, inplace=True)
 
         # 성별 데이터 인코딩 (null이 아닌 경우에만)
         mlb_gender = MultiLabelBinarizer()
         gender_encoded = mlb_gender.fit_transform(df['gender'].fillna('Unknown').astype(str))
 
-        # 나이를 정규화 또는 다른 방식으로 처리
-        # 예: 나이가 null(-1)인 경우 평균 나이로 대체
-        avg_age = df[df['age'] != -1]['age'].mean()
-        df['age'] = df['age'].replace(-1, avg_age)
-        
         # 최종 특성 행렬 생성
         final_features = np.hstack([genre_encoded, artist_encoded, df[['age']], gender_encoded])
         return final_features
-
+    
+    # 유저 특성을 바탕으로 코사인 유사도 계산 메소드
     def calculate_cosine_similarity(self, user_features):
         return cosine_similarity(user_features)
 
-    def calculate_and_save_recommendations(self):
+    # json 업데이트 및 실행 메소드
+    def calculate_and_save_recommendations(self, similarity_threshold = 0.88):
+        # 로그 출력
         self.logger.info("Calculating and saving recommendations")
-        user_data = self.fetch_user_data()
-        user_features = self.preprocess_user_data(user_data)
-        similarity_matrix = self.calculate_cosine_similarity(user_features)
-        
-        all_recommend = {}
-        for user_idx in range(len(user_features)):
-            user_similarity = similarity_matrix[user_idx]
-            most_similar_users = np.argsort(user_similarity)[::-1][1:]
-            all_recommend[user_idx] = most_similar_users[:3].tolist()
-        
-        with open("recommend.json", "w") as file:
-            json.dump(all_recommend, file)           
-        self.logger.info("Recommendations calculated and saved successfully")
-    
-    def schedule_data(self):
-        schedule.every().day.at("00:01").do(self.calculate_and_save_recommendations)
+        try:
+            user_data = self.fetch_user_data()
+            user_features = self.preprocess_user_data(user_data)
+            similarity_matrix = self.calculate_cosine_similarity(user_features)
+            
+            recommendations = {}
+            user_ids = [user['memberId'] for user in user_data['aiResponses']]  # 사용자 ID 목록 추출
 
+            for user_idx, user_id in enumerate(user_ids):
+                user_similarity = similarity_matrix[user_idx]
+                # 유사도가 0.88 이상인 유저들을 탐색
+                similar_users = [(user_ids[idx], sim) for idx, sim in enumerate(user_similarity) if sim >= similarity_threshold and idx != user_idx]
+                # 유사도 0.88 이상 유저들 정렬
+                similar_users.sort(key=lambda x:x[1], reverse=True)
+                # 유사도 0.88 이상의 유저가 3명 미만일 경우
+                if len(similar_users) < 3:
+                    similar_users = sorted(similar_users, key=lambda x: x[1], reverse=True)[:3]
+                similar_user_ids = [user_id for user_id, sim in similar_users]  # 인덱스를 memberId로 변환
+                recommendations[str(user_id)] = similar_user_ids
+
+            final_recommendations = {"memberIds": recommendations}
+
+            with open("recommend.json", "w") as file:
+                json.dump(final_recommendations, file)
+            self.logger.info("Recommendations calculated and saved successfully")
+
+        except Exception as e:
+            self.logger.error(f"Error in calculate_and_save_recommendations: {e}")
+# 스케쥴링 메소드
+    def schedule_data(self):
+        # 하루에 세 번 스케쥴링 되게끔 수정 (8시간 간격)
+        schedule.every().day.at("02:00").do(self.calculate_and_save_recommendations)
+        schedule.every().day.at("10:00").do(self.calculate_and_save_recommendations)
+        schedule.every().day.at("18:00").do(self.calculate_and_save_recommendations)
+
+# 스케쥴링 실행 메소드
     def run_schedule(self):
-        
         self.schedule_data()
         while True:
             schedule.run_pending()
