@@ -24,7 +24,7 @@ class UserRecommendationSystem:
         else:
             raise Exception("Error fetching data from API")
 
-    # 데이터 전처리 함수
+    # 데이터 전처리 메소드
     def preprocess_user_data(self, user_data):
         # 중첩된 구조를 평탄화
         df = pd.json_normalize(user_data['aiResponses'])
@@ -57,8 +57,7 @@ class UserRecommendationSystem:
         return cosine_similarity(user_features)
 
     # json 업데이트 및 실행 메소드
-    def calculate_and_save_recommendations(self, similarity_threshold = 0.88):
-        # 로그 출력
+    def calculate_and_save_recommendations(self, similarity_threshold=0.9, max_recommendations=5):
         self.logger.info("Calculating and saving recommendations")
         try:
             user_data = self.fetch_user_data()
@@ -70,16 +69,24 @@ class UserRecommendationSystem:
 
             for user_idx, user_id in enumerate(user_ids):
                 user_similarity = similarity_matrix[user_idx]
-                # 유사도가 0.88 이상인 유저들을 탐색
+                
+                # 유사도가 0.9 이상인 사용자들을 탐색
                 similar_users = [(user_ids[idx], sim) for idx, sim in enumerate(user_similarity) if sim >= similarity_threshold and idx != user_idx]
-                # 유사도 0.88 이상 유저들 정렬
-                similar_users.sort(key=lambda x:x[1], reverse=True)
-                # 유사도 0.88 이상의 유저가 3명 미만일 경우
+
+                # 유사도가 높은 순서대로 정렬
+                similar_users.sort(key=lambda x: x[1], reverse=True)
+
+                # 유사도가 0.9 이상인 사용자가 3명 미만일 경우 상위 3명을 추천
                 if len(similar_users) < 3:
                     similar_users = sorted(similar_users, key=lambda x: x[1], reverse=True)[:3]
-                similar_user_ids = [user_id for user_id, sim in similar_users]  # 인덱스를 memberId로 변환
-                recommendations[str(user_id)] = similar_user_ids
 
+                # 유사도가 0.9 이상인 사용자가 3명 이상일 경우 최대 5명 추천
+                else:
+                    similar_users = similar_users[:max_recommendations]
+
+                similar_user_ids = [user_id for user_id, sim in similar_users]
+                recommendations[str(user_id)] = similar_user_ids
+            
             final_recommendations = {"memberIds": recommendations}
 
             with open("recommend.json", "w") as file:
@@ -88,11 +95,12 @@ class UserRecommendationSystem:
 
         except Exception as e:
             self.logger.error(f"Error in calculate_and_save_recommendations: {e}")
+
 # 스케쥴링 메소드
     def schedule_data(self):
         # 하루에 세 번 스케쥴링 되게끔 수정 (8시간 간격)
         schedule.every().day.at("02:00").do(self.calculate_and_save_recommendations)
-        schedule.every().day.at("10:00").do(self.calculate_and_save_recommendations)
+        schedule.every().day.at("10:20").do(self.calculate_and_save_recommendations)
         schedule.every().day.at("18:00").do(self.calculate_and_save_recommendations)
 
 # 스케쥴링 실행 메소드
